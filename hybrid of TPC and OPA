@@ -1,0 +1,185 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.distributions.empirical_distribution import ECDF
+
+# 1. Initialize and Define Constants
+# -----------------------------------
+np.random.seed(42)
+N = 64  # Number of Access Points
+M = 32  # Number of Mobile Stations
+K = 8  # Number of antennas per Access Point
+P = 10e-3  # Transmit power of each AP
+f = 2.4e9  # Frequency of sub-6 GHz frequency band
+B = 20e6  # Channel bandwidth
+N0_dBmHz = -174  # Noise power in dBm/Hz
+N0 = 10 ** (N0_dBmHz / 10) / 1000
+
+# 2. Create Channel Model
+# -----------------------
+H = np.random.randn(N, M) + 1j * np.random.randn(N, M)
+g = np.abs(H) ** 2
+
+
+def generate_channel_matrix(N, M, environment="urban"):
+    """
+    Generate a channel matrix H depending on the propagation environment.
+    """
+    if environment == "urban":
+        # Rayleigh fading for urban environment
+        H = np.random.randn(N, M) + 1j * np.random.randn(N, M)
+    elif environment == "open":
+        # Rayleigh fading for open areas
+        H = np.random.randn(N, M) + 1j * np.random.randn(N, M)
+    # ... i might add another environment
+    return H
+
+def introduce_interference(H, interference_level=0.1):
+    """
+    Introduce interference into the channel matrix H.
+    """
+    interference = interference_level * (np.random.randn(*H.shape) + 1j * np.random.randn(*H.shape))
+    return H + interference
+
+def introduce_feedback_delay(H, delay=1):
+    """
+    Introduce a delay in feedback, simulating an outdated channel state.
+    """
+    # This is a basic model; in practice, you'd use a more complex approach.
+    outdated_H = np.roll(H, shift=delay, axis=1)
+    return outdated_H
+
+# 3. Max-Min EE TPC Algorithm
+# ---------------------------
+def max_min_ee_tpc_algorithm(g):
+    P_i_mm = np.ones((N, 1)) * P
+    EE_i_mm = np.log2(1 + (P_i_mm * g) / N0 / B) / P_i_mm
+    min_ee_index_mm = np.argmin(EE_i_mm)
+    if min_ee_index_mm < N:
+        P_i_mm[min_ee_index_mm, 0] *= 2
+    else:
+        print("Invalid index for power redistribution.")
+    return P_i_mm
+
+P_i_mm = max_min_ee_tpc_algorithm(g)
+SE_mm = np.log2(1 + (P_i_mm * g).sum(axis=0) / N0 / B)
+EE_mm = SE_mm / (P_i_mm.sum() + N0)
+
+# 4. Max-Min Fairness OPA Algorithm
+# ---------------------------------
+def max_min_fairness_opa_algorithm(g):
+    W_fairness = np.ones((N, 1))
+    P_i_fairness = W_fairness * P
+    indiv_se_fairness = np.log2(1 + (P_i_fairness * g) / N0 / B)
+    norm_indiv_se_fairness = indiv_se_fairness / np.sum(indiv_se_fairness)
+    P_i_fairness = W_fairness * P * norm_indiv_se_fairness
+    return P_i_fairness
+
+P_i_fairness = max_min_fairness_opa_algorithm(g)
+SE_fairness = np.log2(1 + (P_i_fairness * g).sum(axis=0) / N0 / B)
+EE_fairness = SE_fairness / (P_i_fairness.sum() + N0)
+
+# 5. Hybrid Distributed Approach
+# ------------------------------
+def hybrid_distributed_approach(g):
+    norm_ee_mm = EE_mm / np.sum(EE_mm)
+    norm_ee_fairness = EE_fairness / np.sum(EE_fairness)
+    combined_metric = 0.5 * (norm_ee_mm + norm_ee_fairness)
+    combined_metric /= np.sum(combined_metric)
+    W_fairness = np.ones((N, 1))
+    P_i_hybrid = W_fairness * P * combined_metric
+    return P_i_hybrid
+
+P_i_hybrid = hybrid_distributed_approach(g)
+SE_hybrid = np.log2(1 + (P_i_hybrid * g).sum(axis=0) / N0 / B)
+EE_hybrid = SE_hybrid / (P_i_hybrid.sum() + N0)
+# New Section: Hybrid Optimized Algorithm
+def hybrid_optimized_algorithm(g, P, N0, B, max_iterations=1000, epsilon=1e-6):
+    P_previous = np.zeros_like(g)
+    for iteration in range(max_iterations):
+        P_tpc = compute_tpc(g, N0, B, P)
+        P_opa = compute_opa(g, N0, B, P)
+        P_current = 0.5 * (P_tpc + P_opa)
+        if np.linalg.norm(P_current - P_previous) < epsilon:
+            break
+        P_previous = P_current
+    return P_current
+
+def compute_tpc(g, N0, B, P):
+    return P * np.ones_like(g) / len(g)
+
+def compute_opa(g, N0, B, P):
+    return P * np.ones_like(g) / len(g)
+
+# Calculations
+P_i_mm = max_min_ee_tpc_algorithm(g)
+SE_mm = np.log2(1 + (P_i_mm * g).sum(axis=0) / N0 / B)
+EE_mm = SE_mm / (P_i_mm.sum() + N0)
+
+P_i_fairness = max_min_fairness_opa_algorithm(g)
+SE_fairness = np.log2(1 + (P_i_fairness * g).sum(axis=0) / N0 / B)
+EE_fairness = SE_fairness / (P_i_fairness.sum() + N0)
+
+P_i_hybrid = hybrid_distributed_approach(g)
+SE_hybrid = np.log2(1 + (P_i_hybrid * g).sum(axis=0) / N0 / B)
+EE_hybrid = SE_hybrid / (P_i_hybrid.sum() + N0)
+
+# Using the Hybrid Optimized Algorithm
+P_i_optimized = hybrid_optimized_algorithm(g, P, N0, B)
+SE_optimized = np.log2(1 + (P_i_optimized * g).sum(axis=0) / N0 / B)
+EE_optimized = SE_optimized / (P_i_optimized.sum() + N0)
+
+# 6. Plot CDF for Spectral Efficiency and Energy Efficiency
+# --------------------------------------------------------
+def plot_cdf(data, x_label, title):
+    plt.figure(figsize=(10, 6))
+    for label, values in data.items():
+        ecdf = ECDF(values)
+        plt.plot(ecdf.x, ecdf.y, marker='o', linestyle='-.', label=label)
+    plt.xlabel(x_label)
+    plt.ylabel('CDF')
+    plt.title(title)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+# removed redundancy
+data_se = {
+    'Max-Min EE TPC': SE_mm,
+    'Max-Min Fairness OPA': SE_fairness,
+    'Hybrid Approach': SE_hybrid,
+    'Optimized Hybrid': SE_optimized  # New Line
+}
+
+data_ee = {
+    'Max-Min EE TPC': EE_mm,
+    'Max-Min Fairness OPA': EE_fairness,
+    'Hybrid Approach': EE_hybrid,
+    'Optimized Hybrid': EE_optimized  # New Line
+}
+
+plot_cdf(data_se, 'Spectral Efficiency (bits/s/Hz)', 'CDF of Spectral Efficiency in Cell-Free Massive MIMO System')
+plot_cdf(data_ee, 'Energy Efficiency Energy Efficiency (bits/joule)', 'CDF of Energy Efficiency in Cell-Free Massive MIMO System')
+
+# Calculate the average SE and EE for each method
+avg_SE_mm = np.mean(SE_mm)
+avg_EE_mm = np.mean(EE_mm)
+
+avg_SE_fairness = np.mean(SE_fairness)
+avg_EE_fairness = np.mean(EE_fairness)
+
+avg_SE_hybrid = np.mean(SE_hybrid)
+avg_EE_hybrid = np.mean(EE_hybrid)
+
+avg_SE_optimized = np.mean(SE_optimized)
+avg_EE_optimized = np.mean(EE_optimized)
+
+# Print out the results
+print("Average Spectral Efficiency (SE) and Energy Efficiency (EE) for each method:")
+print("-" * 80)
+print(f"Max-Min EE TPC Algorithm:\nSE: {avg_SE_mm:.4f} bits/s/Hz | EE: {avg_EE_mm:.4f} bits/joule")
+print("-" * 80)
+print(f"Max-Min Fairness OPA Algorithm:\nSE: {avg_SE_fairness:.4f} bits/s/Hz | EE: {avg_EE_fairness:.4f} bits/joule")
+print("-" * 80)
+print(f"Hybrid Distributed Approach:\nSE: {avg_SE_hybrid:.4f} bits/s/Hz | EE: {avg_EE_hybrid:.4f} bits/joule")
+print("-" * 80)
+print(f"Optimized Hybrid Algorithm:\nSE: {avg_SE_optimized:.4f} bits/s/Hz | EE: {avg_EE_optimized:.4f} bits/joule")
