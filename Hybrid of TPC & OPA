@@ -1,0 +1,358 @@
+clear all
+close all
+clc
+% Set random seed
+rng(42);
+
+% Input data
+N = 64;            % Number of Access Points
+M = 128;           % Number of Mobile Stations
+K = 8;             % Number of antennas per Access Point
+P = 1;             % Transmit power of each AP
+f = 2.4e9;         % Frequency of sub-6 GHz frequency band
+B = 10e6;          % Channel bandwidth
+N0_dBmHz = -174;   % Noise power in dBm/Hz
+
+% Convert noise power from dBm/Hz to watts/Hz
+N0 = 10^(N0_dBmHz/10) / 1000;
+
+% Generate random complex channel gains (Rayleigh fading model)
+H = (randn(N, M) + 1i * randn(N, M)) / sqrt(2);
+
+% Spectral Efficiency
+g = abs(H).^2;
+
+% Calculate SE simple
+SE = log2(1 + sum(P * g, 1) / (N0 * B));
+
+% Energy Efficiency simple
+EE = SE / (N * P + N0);
+
+
+%% Calculate TPC - the Max-Min EE approach
+max_iter = 100; % Maximum number of iterations
+P_with_TPC = repmat(P, N, M);  % Initial transmit powers for TPC
+
+for iter = 1:max_iter
+    EEi = log2(1 + P_with_TPC .* g / (N0 * B));
+    
+    min_ee_values = min(EEi, [], 2);  % Retrieve the minimum EE values for each AP
+   
+     min_ee_values1 = min(EEi, [], 1);  % Retrieve the minimum EE values for each AP
+   
+    for i = 1:N
+        min_positions = find(EEi(i, :) == min_ee_values(i));
+       
+        if ~isempty(min_positions)
+           % disp('value of  min_positions is not empty :');
+            min_position = min_positions(1);
+            P_with_TPC(i, min_position) = 2 * P_with_TPC(i, min_position);
+        else
+            disp(['No minimum position found for AP ', num2str(i)]);
+        end
+    end
+end
+
+
+% Calculate EE with TPC after the loop
+EE_with_TPC = log2(1 + sum(P_with_TPC .* g, 1) / (N0 * B)) ./ (sum(P_with_TPC, 1) + N0);
+% Calculate SE with TPC after the loop
+SE_with_TPC = log2(1 + sum(P_with_TPC .* g, 1) / (N0 * B));
+
+%% OPA Algorithm - Sum SE Maximization
+% Calculate weight W for each access point
+W = 1 / N * ones(N, 1);  % Initialize weights equally for all access points
+
+% Allocate power P_i to each access point based on calculated weights
+P_with_OPA = W * P;  % Assign the power proportionally based on the weights
+
+% Calculate SE with OPA after the allocation
+SE_with_OPA = log2(1 + sum(P_with_OPA .* g, 1) / (N0 * B));  % Calculate SE with OPA
+
+% Calculate EE with OPA
+EE_with_OPA = log2(1 + sum(P_with_OPA .* g, 1) / (N0 * B)) ./ (sum(P_with_OPA, 1) + N0);
+% Calculate SE and EE with Simple approach
+SE_simple = log2(1 + P * sum(g, 1) / (N0 * B));
+EE_simple = SE_simple / (N * P + N0);
+
+%% Hybrid model with TPC and OPA
+EE_values = zeros(1, max_iter);
+SE_values = zeros(1, max_iter);
+P_hybrid = P * ones(N, M); % Initiallize Matrix for power allocation of the hybrid scheme
+
+max_iter = 50000;
+threshold = 0.001;  % Set a threshold for balancing EE and SE
+
+for iter = 1:max_iter
+    % Calculate EE and SE for the current power allocation
+    SE_hybrid = log2(1 + sum(P_hybrid .* g, 1) / (N0 * B));
+    EE_hybrid = SE_hybrid ./ (sum(P_hybrid, 1) + N0);
+
+    % Apply TPC - Adjust power based on channel conditions
+    P_TPC = P_hybrid .* g ./ sum(g, 1); % power in p_hybrid matrix is updated based on channel conditions as per TPC 
+
+    % Apply OPA scheme-Assign the power proportionally based on the weights
+    W = 1 / N * ones(N, 1);  % Initialize weights equally for all access points
+    P_with_OPA = W * P;  % Assign the power proportionally based on the weights
+
+    % Define weights for the combination of OPA and TPC schemes
+    weight_TPC = 0.275; % Weight assigned to TPC
+    weight_OPA = 1 - weight_TPC;% Weight assigned to OPA
+
+    % Calculate the combined adjustment considering OPA and TPC schemes
+    P_hybrid = weight_OPA * P_with_OPA + weight_TPC * P_TPC; %Final power allocation for hybrid scheme which is combination of both TPC and OPA
+
+    % Check if EE and SE are within the threshold
+    if (mean(EE_hybrid) < mean(SE_hybrid) - threshold)
+        % Increase power for EE by a smaller factor
+        P_hybrid = 0.0001 * P_hybrid;
+    elseif (mean(SE_hybrid) < mean(EE_hybrid) - threshold)
+        % Increase power for SE by a smaller factor
+        P_hybrid = 0.000001 * P_hybrid;
+    else
+        % If the difference is within the threshold, stop iterating
+        disp('Balanced EE and SE achieved');
+        break;
+    end
+
+    % Update the Pareto front values
+    EE_values(iter) = mean(EE_hybrid);
+    SE_values(iter) = mean(SE_hybrid);
+end
+%% PLOTS
+
+% EE CDF
+% Plotting CDF of Energy Efficiency and Spectral Efficiency with the Hybrid Model
+
+figure
+hold on
+subplot(2,1,1)
+ecdf_EE_no_TPC = cdfplot(abs(EE(:)));
+set(ecdf_EE_no_TPC, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue', 'MarkerSize', 5, 'LineWidth', 1.5);
+legend('Simple')
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+
+subplot(2,1,2)
+ecdf_EE_hybrid = cdfplot(abs(EE_hybrid(:))); % Hybrid EE data
+set(ecdf_EE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta', 'MarkerSize', 5, 'LineWidth', 1.5);
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+legend( 'Hybrid');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off;
+
+% Calculate and display average EE
+avg_EE_simple = mean(EE);
+avg_EE_with_TPC = mean(EE_with_TPC);
+avg_EE_with_OPA = mean(EE_with_OPA);
+avg_EE_hybrid = mean(EE_hybrid);
+
+disp(['Average EE (Simple): ', num2str(avg_EE_simple)]);
+disp(['Average EE (TPC): ', num2str(avg_EE_with_TPC)]);
+disp(['Average EE (OPA): ', num2str(avg_EE_with_OPA)]);
+disp(['Average EE (Hybrid): ', num2str(avg_EE_hybrid)]);
+
+
+%% SE CDF
+figure
+hold on
+subplot(2,1,1)
+ecdf_SE_simple = cdfplot(abs(SE(:)));
+set(ecdf_SE_simple, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue');
+legend('Simple');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF')
+title('CDF of Spectral Efficiency')
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+
+subplot(2,1,2)
+ecdf_SE_hybrid = cdfplot(abs(SE_hybrid(:))); % Hybrid SE data
+set(ecdf_SE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta'); % Color for hybrid
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF');
+title('CDF of Spectral Efficiency')
+legend('Hybrid');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off;
+
+% Calculate and display average SE
+avg_SE_simple = mean(SE);
+avg_SE_with_TPC = mean(SE_with_TPC);
+avg_SE_with_OPA = mean(SE_with_OPA);
+avg_SE_hybrid = mean(SE_hybrid);
+disp(['Average SE (Simple): ', num2str(avg_SE_simple)]);
+disp(['Average SE (TPC): ', num2str(avg_SE_with_TPC)]);
+disp(['Average SE (OPA): ', num2str(avg_SE_with_OPA)]);
+disp(['Average SE (Hybrid): ', num2str(avg_SE_hybrid)]);
+
+%% SEPERATE PLOTS of EE and SE for simple and hybrid scheme
+
+%EE PLOTS
+% For seperate plot of EE without any algorithm
+figure 
+hold on
+ecdf_EE_simple = cdfplot(abs(EE(:)));
+set(ecdf_EE_simple, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue', 'MarkerSize', 5, 'LineWidth', 1.5);
+legend('Simple')
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+
+% For seperate plot of EE with hybrid algorithm
+figure 
+hold on
+ecdf_EE_hybrid = cdfplot(abs(EE_hybrid(:))); % Hybrid EE data
+set(ecdf_EE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta', 'MarkerSize', 5, 'LineWidth', 1.5);
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+legend( 'Hybrid');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off;
+
+% SE PLOTS
+% For seperate plot of SE without any algorithm
+figure 
+hold on
+ecdf_SE_simple = cdfplot(abs(SE(:)));
+set(ecdf_SE_simple, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue');
+legend('Simple');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF')
+title('CDF of Spectral Efficiency')
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off
+
+% For seperate plot of SE with hybrid algorithm
+figure 
+hold on
+ecdf_SE_hybrid = cdfplot(abs(SE_hybrid(:))); % Hybrid SE data
+set(ecdf_SE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta'); % Color for hybrid
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF');
+title('CDF of Spectral Efficiency')
+legend('Hybrid');
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off;
+
+%% Indivsual plots EE Vs CDF for all schemes
+
+figure
+hold on;
+
+subplot(2,2,1) % comment if you want seperate plot without anysubplot
+ecdf_EE_simple = cdfplot(abs(EE(:)));
+set(ecdf_EE_simple, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue');
+legend('Simple');
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+
+subplot(2,2,2) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_EE_with_TPC = cdfplot(abs(EE_with_TPC(:)));
+set(ecdf_EE_with_TPC, 'Marker', '.', 'LineStyle', '-', 'Color', 'red'); 
+legend('EE with TPC');
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+
+subplot(2,2,3) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_EE_with_OPA = cdfplot(abs(EE_with_OPA(:)));
+set(ecdf_EE_with_OPA, 'Marker', '.', 'LineStyle', '-', 'Color', 'green');
+legend('EE with OPA');
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+title('CDF of Energy Efficiency');
+
+subplot(2,2,4) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_EE_hybrid = cdfplot(abs(EE_hybrid(:))); % Hybrid EE data
+set(ecdf_EE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta'); % Color for hybrid
+xlabel('Energy Efficiency (bits/joules)');
+ylabel('CDF');
+legend( 'Hybrid');
+title('CDF of Energy Efficiency');
+
+grid on;
+hold off
+
+
+% Indivsual SE Vs CDF for all schemes
+figure
+title('CDF of Spectral Efficiency');
+subplot(2,2,1) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_SE_no_TPC = cdfplot(abs(SE(:)));
+set(ecdf_SE_no_TPC, 'Marker', '.', 'LineStyle', '-', 'Color', 'blue');
+legend('Simple');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF');
+title('CDF of Spectral Efficiency');
+
+
+subplot(2,2,2) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_SE_with_TPC = cdfplot(abs(SE_with_TPC(:)));
+set(ecdf_SE_with_TPC, 'Marker', '.', 'LineStyle', '-', 'Color', 'red');
+legend('SE with TPC');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF')
+title('CDF of Spectral Efficiency');
+
+subplot(2,2,3) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_SE_with_OPA = cdfplot(abs(SE_with_OPA(:)));
+set(ecdf_SE_with_OPA, 'Marker', '.', 'LineStyle', '-', 'Color', 'green');
+legend('SE with OPA');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF')
+title('CDF of Spectral Efficiency');
+
+subplot(2,2,4) % remove this and add 'figure'if you want seperate plot without any subplot
+ecdf_SE_hybrid = cdfplot(abs(SE_hybrid(:))); % Hybrid SE data
+set(ecdf_SE_hybrid, 'Marker', '.', 'LineStyle', '-', 'Color', 'magenta'); % Color for hybrid
+legend('SE with HYBRID Scheme');
+xlabel('Spectral Efficiency (bits/s/Hz)');
+ylabel('CDF')
+title('CDF of Spectral Efficiency');
+grid on;
+hold off;
+
+
+%% Comparison of EE and SE
+figure;
+plot(EE_values, SE_values, 'o-', 'LineWidth', 2);
+xlabel('Energy Efficiency (EE)');
+ylabel('Spectral Efficiency (SE)');
+title('Relationship between EE vs SE');
+legend('Relationship between SE and EE')
+grid on;
+grid minor; % Add minor grid lines
+set(gca, 'MinorGridAlpha', 0.3); % Set transparency for minor grid
+set(gca, 'GridAlpha', 0.6); % Set transparency for major grid
+hold off;
